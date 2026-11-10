@@ -1,0 +1,20 @@
+---
+title: Terraform
+description: Reusable AWS modules.
+---
+
+# Terraform
+
+Modules live under `infra/terraform/modules/`:
+
+| Module        | Purpose                                  |
+| ------------- | ---------------------------------------- |
+| `vpc`         | Network, subnets, NAT                    |
+| `rds`         | PostgreSQL 16                            |
+| `elasticache` | Redis 7                                  |
+| `s3`          | Encrypted object storage                 |
+| `cloudfront`  | CDN                                      |
+| `eks`         | Kubernetes cluster + node group          |
+
+State is stored in S3 with DynamoDB locking. `terraform plan` runs in CI on
+every PR.

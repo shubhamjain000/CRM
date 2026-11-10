@@ -1,0 +1,30 @@
+---
+title: Quickstart
+description: Bring up the entire local stack in minutes.
+---
+
+# Quickstart
+
+## Prerequisites
+
+- [pnpm](https://pnpm.io) 9+
+- [uv](https://docs.astral.sh/uv/) (Python)
+- [Docker](https://docker.com) + Docker Compose
+- [Terraform](https://terraform.io) 1.7+ (for infra work)
+
+## Bring up the stack
+
+```bash
+make bootstrap   # one-time: installs deps + pre-commit hooks
+make dev         # starts the full Docker stack + installs deps
+```
+
+## Access the services
+
+| Service       | URL                   |
+| ------------- | --------------------- |
+| Frontend      | http://localhost:3000 |
+| Backend API   | http://localhost:8000 |
+| MailHog       | http://localhost:8025 |
+| MinIO console | http://localhost:9001 |
+| Meilisearch   | http://localhost:7700 |

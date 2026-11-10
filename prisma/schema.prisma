@@ -1,0 +1,3200 @@
+// Foundation — Phase 2: Enterprise Auth & Multi-tenancy
+// Prisma schema (SQLite in sandbox; mirrors the Django models for the live app).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Auth: custom email-based user
+// ---------------------------------------------------------------------------
+
+model User {
+  id                String   @id @default(cuid())
+  email             String   @unique
+  name              String
+  passwordHash      String?
+  totpSecret        String?
+  is2faEnabled      Boolean  @default(false)
+  isSuperuser       Boolean  @default(false)
+  passwordChangedAt DateTime @default(now())
+  lastLoginAt       DateTime?
+  lastLoginIp       String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  memberships       TenantMembership[]
+  profile           Profile?
+  loginHistory      LoginHistory[]
+  devices           Device[]
+  apiKeys           ApiKey[]
+  webauthnCredentials WebAuthnCredential[]
+  passwordHistory   PasswordHistory[]
+  auditLogsActor    AuditLog[]    @relation("AuditActor")
+  magicLinks        MagicLink[]
+  passkeyChallenges PasskeyChallenge[]
+  sessions          Session[]
+  campaigns         Campaign[]    @relation("CampaignOwner")
+  products          Product[]     @relation("ProductOwner")
+  priceBooks        PriceBook[]   @relation("PriceBookOwner")
+  vendors           Vendor[]      @relation("VendorOwner")
+  quotes            Quote[]       @relation("QuoteOwner")
+  salesOrders       SalesOrder[]  @relation("SalesOrderOwner")
+  purchaseOrders    PurchaseOrder[] @relation("PurchaseOrderOwner")
+}
+
+model Profile {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  avatarUrl String?
+  phone     String?
+  timezone  String   @default("UTC")
+  locale    String   @default("en")
+  preferences String  @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model PasswordHistory {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  passwordHash String
+  createdAt    DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Multi-tenancy: organizations, memberships, roles, teams
+// ---------------------------------------------------------------------------
+
+model Organization {
+  id            String   @id @default(cuid())
+  name          String
+  slug          String   @unique
+  subdomain     String   @unique
+  customDomain  String?  @unique
+  isActive      Boolean  @default(true)
+  ipAllowlist   String   @default("[]") // JSON array of CIDRs
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  memberships   TenantMembership[]
+  roles         Role[]
+  teams         Team[]
+  auditLogs     AuditLog[]
+  apiKeys       ApiKey[]
+  loginHistory  LoginHistory[]
+}
+
+model TenantMembership {
+  id              String   @id @default(cuid())
+  userId          String
+  organizationId  String
+  roleId          String
+  isActive        Boolean  @default(true)
+  joinedAt        DateTime @default(now())
+  currentOrg      Boolean  @default(false) // user's last-active org
+
+  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  role            Role         @relation(fields: [roleId], references: [id])
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+}
+
+model Role {
+  id              String   @id @default(cuid())
+  organizationId  String?
+  organization    Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name            String
+  description     String?
+  permissions     String   @default("[]") // JSON array of permission strings
+  parentId        String?  // role hierarchy inheritance
+  parent          Role?    @relation("RoleHierarchy", fields: [parentId], references: [id])
+  children        Role[]   @relation("RoleHierarchy")
+  isSystem        Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  memberships     TenantMembership[]
+  fieldSecurity   FieldSecurity[]
+
+  @@index([organizationId])
+}
+
+model Team {
+  id              String   @id @default(cuid())
+  organizationId  String
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name            String
+  parentId        String?
+  parent          Team?    @relation("TeamHierarchy", fields: [parentId], references: [id])
+  children        Team[]   @relation("TeamHierarchy")
+  leadId          String?
+  createdAt       DateTime @default(now())
+
+  @@index([organizationId])
+}
+
+model FieldSecurity {
+  id        String   @id @default(cuid())
+  roleId    String
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  model     String
+  field     String
+  level     String   // "visible" | "read_only" | "hidden"
+  createdAt DateTime @default(now())
+
+  @@unique([roleId, model, field])
+}
+
+// ---------------------------------------------------------------------------
+// Auth: sessions, devices, login history, API keys, credentials
+// ---------------------------------------------------------------------------
+
+model Session {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash       String   @unique
+  name            String?
+  ip              String?
+  userAgent       String?
+  createdAt       DateTime @default(now())
+  lastSeenAt      DateTime @default(now())
+  expiresAt       DateTime
+
+  @@index([userId])
+}
+
+model Device {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name            String
+  ip              String?
+  userAgent       String?
+  platform        String?  // ios, android, web
+  pushToken       String?
+  lastSeenAt      DateTime @default(now())
+  createdAt       DateTime @default(now())
+
+  @@index([userId])
+}
+
+model LoginHistory {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organizationId  String?
+  organization    Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  ip              String?
+  userAgent       String?
+  success         Boolean
+  method          String   // password | passkey | oauth | saml | magic-link | 2fa
+  metadata        String   @default("{}") // JSON
+  createdAt       DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([organizationId, createdAt])
+}
+
+model ApiKey {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organizationId  String?
+  organization    Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  name            String
+  keyHash         String   @unique
+  keyPrefix       String
+  scopes          String   @default("[]") // JSON
+  lastUsedAt      DateTime?
+  expiresAt       DateTime?
+  revokedAt       DateTime?
+  createdAt       DateTime @default(now())
+
+  @@index([organizationId])
+}
+
+model WebAuthnCredential {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  credentialId    String   @unique // base64url
+  publicKey       String   // base64url
+  counter         Int      @default(0)
+  transports      String   @default("[]") // JSON
+  name            String   @default("Passkey")
+  createdAt       DateTime @default(now())
+
+  @@index([userId])
+}
+
+model PasskeyChallenge {
+  id              String   @id @default(cuid())
+  userId          String?
+  user            User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  challenge       String
+  type            String   // "registration" | "authentication"
+  createdAt       DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+model MagicLink {
+  id              String   @id @default(cuid())
+  email           String
+  tokenHash       String   @unique
+  userId          String?
+  user            User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt       DateTime
+  usedAt          DateTime?
+  createdAt       DateTime @default(now())
+
+  @@index([email])
+}
+
+// ---------------------------------------------------------------------------
+// Audit log — every auth/event
+// ---------------------------------------------------------------------------
+
+model AuditLog {
+  id              String   @id @default(cuid())
+  organizationId  String?
+  organization    Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  actorId         String?
+  actor           User?    @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  action          String   // e.g. user.login, user.invite, role.create
+  targetType      String?
+  targetId        String?
+  ip              String?
+  userAgent       String?
+  metadata        String   @default("{}") // JSON
+  createdAt       DateTime @default(now())
+
+  @@index([organizationId, createdAt])
+  @@index([actorId])
+  @@index([action])
+}
+
+// ---------------------------------------------------------------------------
+// Login throttling (django-axes style)
+// ---------------------------------------------------------------------------
+
+model LoginAttempt {
+  id              String   @id @default(cuid())
+  ip              String
+  email           String?
+  success         Boolean
+  createdAt       DateTime @default(now())
+
+  @@index([ip, createdAt])
+  @@index([email, createdAt])
+}
+
+// ===========================================================================
+// Phase 3 — CRM: Pipelines, Stages, Accounts, Contacts, Leads, Deals
+// All tenant-scoped (organizationId) + soft-delete (deletedAt) + composite
+// indexes mirroring the Django backend.
+// ===========================================================================
+
+model Pipeline {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  isActive        Boolean  @default(true)
+  isDefault       Boolean  @default(false)
+  modules         String   @default("[]") // JSON array
+  order           Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  stages          Stage[]
+  deals           Deal[]
+  transitions     StageTransition[]
+  blueprints      Blueprint[]
+
+  @@index([organizationId])
+}
+
+model Stage {
+  id              String   @id @default(cuid())
+  organizationId  String
+  pipelineId      String
+  pipeline        Pipeline @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  name            String
+  probability     Float    @default(0)
+  order           Int      @default(0)
+  isWonStage      Boolean  @default(false)
+  isLostStage     Boolean  @default(false)
+  isClosed        Boolean  @default(false)
+  isLocked        Boolean  @default(false) // can't drag back from won/lost
+  businessDaysLimit Int?   // alert if stuck
+  color           String   @default("#3b82f6")
+  icon            String?
+  forecastCategory String  @default("pipeline") // pipeline|best_case|commit|closed|omitted
+  createdAt       DateTime @default(now())
+
+  deals           Deal[]
+  transitionsFrom StageTransition[] @relation("TransitionFrom")
+  transitionsTo   StageTransition[] @relation("TransitionTo")
+  historyFrom     DealStageHistory[] @relation("HistoryFrom")
+  historyTo       DealStageHistory[] @relation("HistoryTo")
+  blueprintStates BlueprintState[]
+
+  @@index([organizationId, pipelineId])
+}
+
+model Account {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  accountNumber   String?
+  accountType     String   @default("prospect") // customer|prospect|partner|competitor|vendor
+  industry        String?
+  annualRevenue   Float?
+  employees       Int?
+  website         String?
+  billingAddress  String   @default("{}")
+  shippingAddress String   @default("{}")
+  parentAccountId String?
+  parentAccount   Account? @relation("AccountHierarchy", fields: [parentAccountId], references: [id], onDelete: Restrict)
+  children        Account[] @relation("AccountHierarchy")
+  tickerSymbol    String?
+  ownership       String?
+  rating          String?
+  sicCode         String?
+  isSeed          Boolean  @default(false)
+  ownerId         String
+  tags            String   @default("[]")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  contacts        Contact[]
+  deals           Deal[]
+  convertedLeads  Lead[]
+  listings        ContactListing[]
+  pocContactId    String?
+  pocContact      Contact? @relation("AccountPoc", fields: [pocContactId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, deletedAt])
+  @@index([organizationId, ownerId])
+  @@index([organizationId, accountType])
+  @@index([organizationId, parentAccountId])
+}
+
+model Contact {
+  id              String   @id @default(cuid())
+  organizationId  String
+  firstName       String
+  lastName        String
+  accountId       String?
+  account         Account? @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  title           String?
+  emails          String   @default("[]") // JSON array
+  phones          String   @default("[]") // JSON array
+  addresses       String   @default("[]") // JSON array
+  socialProfiles  String   @default("{}") // JSON
+  birthday        DateTime?
+  department      String?
+  assistant       String?
+  leadSource      String?
+  description     String? // free-form notes (import wizard Description column)
+  ownerId         String
+  doNotCall       Boolean  @default(false)
+  emailOptOut     Boolean  @default(false)
+
+  // Unstop Sales CSM cadence — next touchpoint in the follow-up loop.
+  // csmNextStep is one of the canonical labels in src/lib/csm.ts;
+  // At/DueAt are maintained server-side (never accepted from clients).
+  csmNextStep      String    @default("None")
+  csmNextStepAt    DateTime? // when the current step was set
+  csmNextStepDueAt DateTime? // follow-up due (set date + step offset)
+
+  // Listing Intelligence (additive) — mirrors the daily listing CSV columns.
+  // All optional (NULL default) so no existing save flow can break.
+  recruiterTag         String?    // New Recruiter | Existing Recruiter (CSV recruiter_tag)
+  premiumStatus        String?    // Free | Paid (CSV premium)
+  listingSubtype       String?    // Jobs | Internships (CSV subtype)
+  totalApplications    Int?       // CSV applications
+  reasonableFitPct     Float?     // 0–100 (CSV reasonable_fit_%)
+  reasonableScoreUsers Int?       // CSV reasonable_score_users
+  listingUrl           String?    // clickable listing link (CSV listing_link)
+  listingTitle         String?    // CSV listing_title
+  listingCategory      String?    // JSON array of category labels (CSV category)
+  dateApproved         DateTime?  // CSV date_approved
+  visibility           String?    // mirror of latest listing: Public | Private
+  hiringStatus         String?    // mirror of latest listing: Open | In Review | Filled | Closed
+  relevantApplications Int?       // mirror of latest listing: applications ≥34% match
+  hiredCount           Int?       // mirror of latest listing: hires closed
+
+  // CSM automation fields referenced by workflow conditions/actions and
+  // assignment-rule criteria (additive, optional — maintained by automations).
+  csmRecruiterType     String?    // First Time | Existing | New
+  csmStatus            String?    // free-form CSM status label
+  csmNextCallDate      DateTime?  // next scheduled call date
+  totalReachoutsDone   Int?       // incremented by reachout automations
+  lastReachedOutAt     DateTime?  // stamped when a reachout is logged/sent
+
+  // Zoho "Recruiter Information" form (additive, optional — mirrors the
+  // recruiter form sections: Form Details / Reachout TAT & CSM Status /
+  // Paid Plan Pitch & Details / Additional Recruiter Details).
+  typeOfLead           String?    // Type of Lead (CSM | Organic | Inbound | Outbound | Other)
+  recruiterTriggers    String?    // Recruiter Triggers (free text)
+  company              String?    // Form Details: Company
+  employeeRange        String?    // Form Details: Employee Range (picklist)
+  linkedinUrl          String?    // Form Details: LinkedIn URL
+  totalOps             Int?       // Form Details: Total Ops
+  modifiedById         String?    // Form Details: Modified By (stamped server-side on PATCH)
+  reachoutTat          String?    // Reachout TAT (e.g. "Same day", "24 hours")
+  firstConversationAt  DateTime?  // First Conversation Call (date)
+  totalConversationsHad Int?      // Total Conversations Had
+  hiringRoles          String?    // "How many & for what roles are you hiring?"
+  joiningTimeline      String?    // "How soon you want the candidate to join?" (picklist)
+  otherPlatformUsed    String?    // "Have you used any other platform?"
+  recruiterFeedback    String?    // Recruiter Feedback (long text)
+  paidPlanPitch        String?    // Paid Plan Pitch (long text)
+  livePremiumOps       Int?       // No. of Live Premium Ops
+  postPitchLeadType    String?    // Post Pitch Lead type (picklist)
+  paidPlanPitchDate    DateTime?  // Date of Paid Plan Pitch
+  paidPlanFeedback     String?    // Paid Recruiter Subjective Feedback (long text)
+  paidPlanExpiryDate   DateTime?  // Paid Plan Expiry Date
+  addRecruiterName     String?    // Additional Recruiter Details: Name (Add)
+  addRecruiterDesignation String? // Additional Recruiter Details: Designation
+  addRecruiterMobile   String?    // Additional Recruiter Details: Mobile Number (Add)
+
+  isSeed          Boolean  @default(false)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  primaryDeals    Deal[]   @relation("DealPrimaryContact")
+  dealContacts    DealContact[]
+  convertedLeads  Lead[]
+  pocForAccounts  Account[] @relation("AccountPoc")
+  listings        ContactListing[]
+
+  @@index([organizationId, deletedAt])
+  @@index([organizationId, csmNextStepDueAt])
+  @@index([organizationId, accountId])
+  @@index([organizationId, ownerId])
+}
+
+/**
+ * Listing history — one recruiter (Contact) accumulates many listings over
+ * time. Every import row with a NEW listing link adds one entry here, so the
+ * same email can hold 2+ listings across imports (long-term use). The
+ * Contact's own listing* columns stay a mirror of the LATEST listing.
+ */
+model ContactListing {
+  id             String   @id @default(cuid())
+  organizationId String
+  contactId      String
+  contact        Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  accountId      String?  // company the listing belongs to (grouping key)
+  account        Account? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  url            String?  // listing link — the per-listing identity
+  title          String?
+  subtype        String?  // Jobs | Internships
+  category       String?  // JSON array of category labels
+  recruiterTag   String?  // New Recruiter | Existing Recruiter
+  premiumStatus  String?  // Free | Paid
+  visibility     String?  // Public | Private (CSV column or filled in later by the sales agent)
+  hiringStatus   String?  // Open | In Review | Filled | Closed (sales-agent maintained)
+  totalApplications     Int?
+  relevantApplications  Int?  // applications with a ≥34% match ("Relevant Applications")
+  hiredCount            Int?  // hires closed through this listing
+  reasonableFitPct      Float?
+  reasonableScoreUsers  Int?
+  dateApproved   DateTime?
+  source         String   @default("import") // import | api | manual
+  firstImportedAt DateTime @default(now())
+  lastImportedAt  DateTime @default(now())
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([organizationId, contactId])
+  @@index([contactId])
+  @@index([organizationId, accountId])
+}
+
+model Lead {
+  id              String   @id @default(cuid())
+  organizationId  String
+  firstName       String
+  lastName        String
+  emails          String   @default("[]") // JSON array
+  phones          String   @default("[]") // JSON array
+  company         String?
+  title           String?
+  leadSource      String?
+  leadStatus      String   @default("new") // new|contacted|qualified|unqualified|converted
+  rating          String? // hot|warm|cold
+  industry        String?
+  annualRevenue   Float?
+  employees       Int?
+  website         String?
+  billingAddress  String   @default("{}")
+  shippingAddress String   @default("{}")
+  description     String?
+  ownerId         String
+  assignedToId    String?
+  createdById     String
+  lastActivity    DateTime @default(now())
+  score           Float    @default(0)
+  isConverted     Boolean  @default(false)
+  isSeed          Boolean  @default(false)
+  convertedAccountId String?
+  convertedAccount  Account? @relation(fields: [convertedAccountId], references: [id], onDelete: Restrict)
+  convertedContactId String?
+  convertedContact  Contact? @relation(fields: [convertedContactId], references: [id], onDelete: Restrict)
+  convertedDealId String?
+  convertedDeal   Deal?    @relation(fields: [convertedDealId], references: [id], onDelete: Restrict)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  @@index([organizationId, deletedAt])
+  @@index([organizationId, leadStatus, ownerId])
+  @@index([organizationId, ownerId, createdAt])
+  @@index([organizationId, lastActivity])
+}
+
+model Deal {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  amount          Float    @default(0)
+  currency        String   @default("INR")
+  stageId         String
+  stage           Stage    @relation(fields: [stageId], references: [id], onDelete: Restrict)
+  pipelineId      String
+  pipeline        Pipeline @relation(fields: [pipelineId], references: [id], onDelete: Restrict)
+  closeDate       DateTime?
+  probability     Float    @default(0)
+  accountId       String?
+  account         Account? @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  primaryContactId String?
+  primaryContact  Contact? @relation("DealPrimaryContact", fields: [primaryContactId], references: [id], onDelete: SetNull)
+  ownerId         String
+  leadSource      String?
+  type            String   @default("new_business") // new_business|existing_business|renewal
+  nextStep        String?
+  description     String?
+  lostReason      String?
+  competitors     String   @default("[]") // JSON array
+  forecastCategory String  @default("pipeline") // pipeline|best_case|commit|closed|omitted
+  isSeed          Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  convertedLeads  Lead[]
+  dealContacts    DealContact[]
+  stageHistory    DealStageHistory[]
+  blueprintExecutions BlueprintExecution[]
+
+  @@index([organizationId, deletedAt])
+  @@index([organizationId, stageId])
+  @@index([organizationId, ownerId])
+  @@index([organizationId, pipelineId])
+  @@index([organizationId, closeDate])
+}
+
+model DealContact {
+  id              String   @id @default(cuid())
+  dealId          String
+  deal            Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  contactId       String
+  contact         Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  role            String?
+  createdAt       DateTime @default(now())
+
+  @@unique([dealId, contactId])
+  @@index([dealId])
+  @@index([contactId])
+}
+
+// ---------------------------------------------------------------------------
+// Custom fields — extensible schema per tenant per module
+// ---------------------------------------------------------------------------
+
+model CustomField {
+  id              String   @id @default(cuid())
+  organizationId  String
+  module          String   // lead|contact|account|deal
+  label           String
+  apiName         String
+  fieldType       String   // text|long_text|number|currency|picklist|checkbox|...
+  fieldOptions    String   @default("{}") // JSON
+  validationRules String   @default("{}") // JSON
+  defaultValue    String?
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  values          CustomFieldValue[]
+
+  @@unique([organizationId, module, apiName])
+  @@index([organizationId, module])
+}
+
+model CustomFieldValue {
+  id              String   @id @default(cuid())
+  organizationId  String
+  fieldId         String
+  field           CustomField @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+  module          String
+  recordId        String
+  value           String   @default("null") // JSON
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([fieldId, recordId])
+  @@index([organizationId, module, recordId])
+}
+
+// ===========================================================================
+// Phase 4 — CRM UX: SavedViews, RecentlyViewed, Activity, Notes, Files, Locks
+// ===========================================================================
+
+model SavedView {
+  id              String   @id @default(cuid())
+  organizationId  String
+  userId          String
+  module          String   // lead|contact|account|deal
+  name            String
+  isShared        Boolean  @default(false)
+  isDefault       Boolean  @default(false)
+  config          String   @default("{}") // JSON: {filters, sort, columns, groupBy}
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([organizationId, userId, name])
+  @@index([organizationId, userId, module])
+  @@index([organizationId, module, isShared])
+}
+
+model RecentlyViewed {
+  id              String   @id @default(cuid())
+  organizationId  String
+  userId          String
+  module          String
+  recordId        String
+  recordName      String   @default("")
+  viewedAt        DateTime @default(now())
+
+  @@unique([organizationId, userId, module, recordId])
+  @@index([organizationId, userId, viewedAt])
+  @@index([organizationId, userId, module, viewedAt])
+}
+
+model Activity {
+  id              String   @id @default(cuid())
+  organizationId  String
+  userId          String?
+  module          String
+  recordId        String
+  recordName      String   @default("")
+  action          String   // created|updated|deleted|converted|note_added|file_attached|emailed|called|meeting
+  description     String?
+  metadata        String   @default("{}") // JSON
+  isSeed          Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  @@index([organizationId, module, recordId, createdAt])
+  @@index([organizationId, userId, createdAt])
+}
+
+model Note {
+  id              String   @id @default(cuid())
+  organizationId  String
+  userId          String
+  module          String
+  recordId        String
+  kind            String   @default("general") // general | call-outcome | day-0 | day-1-reconnect | day-3-followup | week-1-checkin | week-2-update | month-1-review | meeting | email | quote-sent | payment-reminder | objection | next-steps
+  body            String
+  mentions        String   @default("[]") // JSON array of user ids
+  hashtags        String   @default("[]") // JSON array
+  isSeed          Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([organizationId, module, recordId, createdAt])
+}
+
+model FileAttachment {
+  id              String   @id @default(cuid())
+  organizationId  String
+  userId          String
+  module          String
+  recordId        String
+  filename        String
+  fileUrl         String
+  fileSize        Int      @default(0)
+  mimeType        String   @default("application/octet-stream")
+  createdAt       DateTime @default(now())
+
+  @@index([organizationId, module, recordId])
+}
+
+model RecordLock {
+  id              String   @id @default(cuid())
+  organizationId  String
+  userId          String
+  module          String
+  recordId        String
+  lockedAt        DateTime @default(now())
+  expiresAt       DateTime
+
+  @@unique([organizationId, module, recordId])
+  @@index([organizationId, module, recordId])
+}
+
+// ===========================================================================
+// Phase 5 — Productivity: Tasks, Events, Calls, Meetings
+// ===========================================================================
+
+model Task {
+  id              String   @id @default(cuid())
+  organizationId  String
+  title           String
+  description     String?
+  dueDate         DateTime?
+  reminder        DateTime?
+  reminderSentAt  DateTime?
+  priority        String   @default("medium") // low|medium|high|urgent
+  status          String   @default("not_started") // not_started|in_progress|completed|deferred
+  assigneeId      String?
+  ownerId         String
+  createdById     String
+  parentTaskId    String?
+  parentTask      Task?    @relation("TaskSubtasks", fields: [parentTaskId], references: [id], onDelete: NoAction)
+  subtasks        Task[]   @relation("TaskSubtasks")
+  relatedModule   String?
+  relatedId       String?
+  recurrence      String?  // RRULE
+  timeSpent       Int      @default(0) // seconds
+  timerStartedAt  DateTime?
+  checklist       String   @default("[]") // JSON: [{text, done}]
+  tags            String   @default("[]") // JSON array
+  lastActivity    DateTime @default(now())
+  isSeed          Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  @@index([organizationId, assigneeId, status])
+  @@index([organizationId, dueDate])
+  @@index([organizationId, ownerId, status])
+  @@index([organizationId, lastActivity])
+}
+
+model Event {
+  id              String   @id @default(cuid())
+  organizationId  String
+  title           String
+  description     String?
+  start           DateTime
+  end             DateTime
+  allDay          Boolean  @default(false)
+  location        String?
+  externalAttendees String  @default("[]") // JSON array of emails
+  recurrence      String?  // RRULE
+  reminders       String   @default("[]") // JSON: [{offsetMinutes, sent}]
+  conferenceUrl   String?
+  conferenceProvider String? // google_meet|zoom|teams|none
+  relatedModule   String?
+  relatedId       String?
+  status          String   @default("confirmed") // confirmed|tentative|cancelled
+  organizerId     String
+  visibility      String   @default("busy") // public|private|busy
+  isSeed          Boolean  @default(false)
+  meeting         Meeting?
+  attendees       EventAttendee[]
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  @@index([organizationId, start])
+  @@index([organizationId, organizerId])
+  @@index([organizationId, status])
+}
+
+model EventAttendee {
+  id              String   @id @default(cuid())
+  eventId         String
+  event           Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  userId          String
+  response        String   @default("none") // yes|no|maybe|none
+  required        Boolean  @default(true)
+  respondedAt     DateTime?
+
+  @@unique([eventId, userId])
+  @@index([eventId])
+}
+
+model Meeting {
+  id              String   @id @default(cuid())
+  eventId         String   @unique
+  event           Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  agenda          String?
+  actionItems     String   @default("[]") // JSON: [{text, done, assigneeId}]
+  followUpTasksCreated Boolean @default(false)
+  engagementScore Float?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model Call {
+  id              String   @id @default(cuid())
+  organizationId  String
+  subject         String
+  callType        String   @default("outbound") // inbound|outbound|missed
+  duration        Int      @default(0) // seconds
+  outcome         String   @default("connected") // connected|voicemail|no_answer|busy
+  recordingUrl    String?
+  transcription   String?
+  sentiment       String?  // positive|neutral|negative
+  relatedModule   String?
+  relatedId       String?
+  voipProvider    String?
+  voipCallId      String?
+  notes           String?
+  startedAt       DateTime @default(now())
+  endedAt         DateTime?
+  ownerId         String
+  // Call transfer (admin only). transferredFromId = the previous owner at the
+  // moment of transfer; transferredToId = the new owner (= ownerId afterwards);
+  // transferredAt = when the handoff happened. Nullable + no FK relations to
+  // match the existing loose-reference pattern used across the Call model.
+  transferredFromId String?
+  transferredToId   String?
+  transferredAt     DateTime?
+  isSeed            Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  @@index([organizationId, startedAt])
+  @@index([organizationId, relatedModule, relatedId])
+  @@index([organizationId, transferredToId])
+}
+
+// ===========================================================================
+// Phase 6 — Content: Notes, Files, Attachments
+// ===========================================================================
+
+model Doc {
+  id              String   @id @default(cuid())
+  organizationId  String
+  title           String
+  body            String   @default("") // HTML or Yjs doc JSON
+  bodyType        String   @default("html") // html|yjs|markdown
+  isPinned        Boolean  @default(false)
+  isPrivate       Boolean  @default(false)
+  authorId        String
+  lastEditedById  String?
+  relatedModule   String?
+  relatedId       String?
+  mentions        String   @default("[]") // JSON array of user ids
+  hashtags        String   @default("[]") // JSON array
+  tags            String   @default("[]") // JSON array
+  editHistory     String   @default("[]") // JSON array of {userId, timestamp, snapshot}
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  comments        DocComment[]
+  versions        DocVersion[]
+
+  @@index([organizationId, authorId, createdAt])
+  @@index([organizationId, relatedModule, relatedId])
+  @@index([organizationId, isPinned])
+}
+
+model DocComment {
+  id              String   @id @default(cuid())
+  docId           String
+  doc             Doc      @relation(fields: [docId], references: [id], onDelete: Cascade)
+  userId          String
+  selectedText    String?
+  body            String
+  resolved        Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  @@index([docId, createdAt])
+}
+
+model DocVersion {
+  id              String   @id @default(cuid())
+  docId           String
+  doc             Doc      @relation(fields: [docId], references: [id], onDelete: Cascade)
+  userId          String
+  body            String
+  versionNumber   Int
+  createdAt       DateTime @default(now())
+
+  @@unique([docId, versionNumber])
+  @@index([docId, versionNumber])
+}
+
+model File {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  originalName    String
+  size            Int      @default(0)
+  mimeType        String   @default("application/octet-stream")
+  extension       String   @default("")
+  storageKey      String
+  storageProvider String   @default("local") // local|s3|minio|r2
+  version         Int      @default(1)
+  uploadedById    String
+  relatedModule   String?
+  relatedId       String?
+  previewUrl      String?
+  thumbnailUrl    String?
+  isStarred       Boolean  @default(false)
+  description     String?
+  tags            String   @default("[]") // JSON array
+  virusScanStatus String   @default("pending") // pending|clean|infected|skipped
+  ocrText         String?
+  ocrStatus       String   @default("skipped") // pending|done|failed|skipped
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  versions        FileVersion[]
+  attachments     Attachment[]
+  shareLinks      ShareLink[]
+
+  @@index([organizationId, uploadedById, createdAt])
+  @@index([organizationId, relatedModule, relatedId])
+  @@index([organizationId, isStarred])
+  @@index([organizationId, virusScanStatus])
+  @@index([organizationId, deletedAt, createdAt])
+}
+
+model FileVersion {
+  id              String   @id @default(cuid())
+  fileId          String
+  file            File     @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  versionNumber   Int
+  size            Int
+  storageKey      String
+  uploadedById    String
+  changeSummary   String?
+  createdAt       DateTime @default(now())
+
+  @@unique([fileId, versionNumber])
+  @@index([fileId, versionNumber])
+}
+
+model ShareLink {
+  id              String   @id @default(cuid())
+  fileId          String
+  file            File     @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  token           String   @unique
+  createdById     String
+  expiresAt       DateTime?
+  passwordHash    String?
+  downloadLimit   Int?
+  downloadCount   Int      @default(0)
+  watermark       Boolean  @default(true)
+  createdAt       DateTime @default(now())
+
+  @@index([fileId])
+}
+
+model Attachment {
+  id              String   @id @default(cuid())
+  organizationId  String
+  recordModule    String   // lead|contact|account|deal|task|event|note
+  recordId        String
+  fileId          String
+  file            File     @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  attachedById    String
+  description     String?
+  isInline        Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  @@unique([recordModule, recordId, fileId])
+  @@index([organizationId, recordModule, recordId])
+  @@index([fileId])
+}
+
+// ===========================================================================
+// Phase 7 — Real-time fabric: Activity Feed, Notifications, Presence
+// ===========================================================================
+
+model FeedPost {
+  id              String   @id @default(cuid())
+  organizationId  String
+  authorId        String
+  body            String   @default("")
+  mentions        String   @default("[]") // JSON array of user ids
+  hashtags        String   @default("[]") // JSON array
+  attachments     String   @default("[]") // JSON array of file ids
+  relatedModule   String?
+  relatedId       String?
+  isPinned        Boolean  @default(false)
+  editedAt        DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  comments        FeedComment[]
+  reactions       FeedReaction[]
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, relatedModule, relatedId])
+  @@index([organizationId, authorId])
+  @@index([organizationId, isPinned])
+}
+
+model FeedComment {
+  id              String   @id @default(cuid())
+  organizationId  String
+  postId          String
+  post            FeedPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  authorId        String
+  body            String
+  mentions        String   @default("[]") // JSON array
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  reactions       FeedReaction[]
+
+  @@index([postId, createdAt])
+  @@index([organizationId, authorId])
+}
+
+model FeedReaction {
+  id              String   @id @default(cuid())
+  organizationId  String
+  postId          String?
+  post            FeedPost? @relation(fields: [postId], references: [id], onDelete: Cascade)
+  commentId       String?
+  comment         FeedComment? @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  userId          String
+  emoji           String   @default("👍")
+  createdAt       DateTime @default(now())
+
+  @@unique([userId, postId, emoji])
+  @@unique([userId, commentId, emoji])
+  @@index([postId])
+  @@index([commentId])
+}
+
+model Notification {
+  id              String   @id @default(cuid())
+  organizationId  String
+  actorId         String?
+  verb            String   // assigned|mentioned|commented|liked|shared|created|updated|approved|uploaded|invited
+  targetModule    String?
+  targetId        String?
+  targetName      String?
+  recipientId     String
+  readAt          DateTime?
+  channel         String   @default("in_app") // in_app|email|push|sms
+  data            String   @default("{}") // JSON
+  archived        Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  @@index([organizationId, recipientId, readAt])
+  @@index([organizationId, recipientId, createdAt])
+  @@index([organizationId, createdAt])
+}
+
+model NotificationPreference {
+  id              String   @id @default(cuid())
+  organizationId  String
+  userId          String
+  notificationType String  // mention|comment|like|assignment|approval|file_upload|email_received|task_due|event_reminder
+  inApp           Boolean  @default(true)
+  email           Boolean  @default(true)
+  push            Boolean  @default(false)
+  sms             Boolean  @default(false)
+  digestMode      String   @default("immediate") // immediate|daily|weekly
+
+  @@unique([organizationId, userId, notificationType])
+}
+
+model UserPresence {
+  id              String   @id @default(cuid())
+  organizationId  String
+  userId          String   @unique
+  status          String   @default("offline") // online|away|busy|dnd|offline
+  statusMessage   String?
+  lastSeenAt      DateTime @default(now())
+  viewingModule   String?
+  viewingId       String?
+  viewingName     String?
+  updatedAt       DateTime @updatedAt
+
+  @@index([organizationId, status])
+}
+
+model LiveCursor {
+  id              String   @id @default(cuid())
+  organizationId  String
+  userId          String
+  module          String
+  recordId        String
+  field           String
+  position        Int      @default(0)
+  color           String   @default("#3b82f6")
+  updatedAt       DateTime @default(now())
+
+  @@unique([userId, module, recordId])
+  @@index([module, recordId])
+}
+
+// ===========================================================================
+// Phase 8 — Pipeline Engine: Stage Transitions, Deal Stage History
+// ===========================================================================
+
+model StageTransition {
+  id              String   @id @default(cuid())
+  organizationId  String
+  pipelineId      String
+  pipeline        Pipeline @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  fromStageId     String
+  fromStage       Stage    @relation("TransitionFrom", fields: [fromStageId], references: [id], onDelete: Cascade)
+  toStageId       String
+  toStage         Stage    @relation("TransitionTo", fields: [toStageId], references: [id], onDelete: Cascade)
+  allowedRoles    String   @default("[]") // JSON array of role names, empty = all
+  conditions      String   @default("{}") // JSON: {min_amount, max_amount, etc.}
+  requireApproval Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  @@unique([pipelineId, fromStageId, toStageId])
+  @@index([pipelineId, fromStageId])
+}
+
+model DealStageHistory {
+  id              String   @id @default(cuid())
+  organizationId  String
+  dealId          String
+  deal            Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  fromStageId     String?
+  fromStage       Stage?   @relation("HistoryFrom", fields: [fromStageId], references: [id], onDelete: SetNull)
+  toStageId       String?
+  toStage         Stage?   @relation("HistoryTo", fields: [toStageId], references: [id], onDelete: SetNull)
+  changedById     String
+  changedAt       DateTime @default(now())
+  reason          String?
+  durationInPreviousStage Int @default(0) // seconds
+
+  @@index([dealId, changedAt])
+  @@index([organizationId, toStageId, changedAt])
+}
+
+// ===========================================================================
+// Phase 9 — Blueprint Engine: enforce sales process compliance
+// ===========================================================================
+
+model Blueprint {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  pipelineId      String
+  pipeline        Pipeline @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  isActive        Boolean  @default(false)
+  isPublished     Boolean  @default(false)
+  description     String?
+  version         Int      @default(1)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  states          BlueprintState[]
+  transitions     BlueprintTransition[]
+  executions      BlueprintExecution[]
+
+  @@index([organizationId, pipelineId, isActive])
+}
+
+model BlueprintState {
+  id              String   @id @default(cuid())
+  organizationId  String
+  blueprintId     String
+  blueprint       Blueprint @relation(fields: [blueprintId], references: [id], onDelete: Cascade)
+  stageId         String
+  stage           Stage    @relation(fields: [stageId], references: [id], onDelete: Cascade)
+  stateType       String   @default("normal") // normal|transitional|terminal
+  entryActions    String   @default("[]") // JSON array
+  exitActions     String   @default("[]") // JSON array
+  timeLimitHours  Int?
+  createdAt       DateTime @default(now())
+
+  transitionsFrom BlueprintTransition[] @relation("BPTransitionFrom")
+  transitionsTo   BlueprintTransition[] @relation("BPTransitionTo")
+  timers          BlueprintTimer[]
+  timerTargets    BlueprintTimer[] @relation("BPTimerTarget")
+  executions      BlueprintExecution[]
+
+  @@unique([blueprintId, stageId])
+  @@index([blueprintId])
+}
+
+model BlueprintTransition {
+  id              String   @id @default(cuid())
+  organizationId  String
+  blueprintId     String
+  blueprint       Blueprint @relation(fields: [blueprintId], references: [id], onDelete: Cascade)
+  fromStateId     String
+  fromState       BlueprintState @relation("BPTransitionFrom", fields: [fromStateId], references: [id], onDelete: Cascade)
+  toStateId       String
+  toState         BlueprintState @relation("BPTransitionTo", fields: [toStateId], references: [id], onDelete: Cascade)
+  allowedRoles    String   @default("[]") // JSON array
+  conditions      String   @default("{}") // JSON field expressions
+  requireFields   String   @default("[]") // JSON array of field names
+  requireApproval Boolean  @default(false)
+  postTransitionActions String @default("[]") // JSON array
+  createdAt       DateTime @default(now())
+
+  fieldRequirements BlueprintFieldRequirement[]
+  assignments       BlueprintAssignment[]
+
+  @@unique([blueprintId, fromStateId, toStateId])
+  @@index([blueprintId, fromStateId])
+}
+
+model BlueprintFieldRequirement {
+  id              String   @id @default(cuid())
+  organizationId  String
+  transitionId    String
+  transition      BlueprintTransition @relation(fields: [transitionId], references: [id], onDelete: Cascade)
+  fieldName       String
+  condition       String   @default("not_empty") // not_empty|equals|not_equals|greater_than|less_than|in
+  value           String?
+
+  @@index([transitionId])
+}
+
+model BlueprintAssignment {
+  id              String   @id @default(cuid())
+  organizationId  String
+  transitionId    String
+  transition      BlueprintTransition @relation(fields: [transitionId], references: [id], onDelete: Cascade)
+  assignTo        String   // role|user|team|field_value
+  assignValue     String
+
+  @@index([transitionId])
+}
+
+model BlueprintTimer {
+  id              String   @id @default(cuid())
+  organizationId  String
+  stateId         String
+  state           BlueprintState @relation(fields: [stateId], references: [id], onDelete: Cascade)
+  hours           Int
+  action          String   // auto_transition|notify|escalate
+  targetStateId   String?
+  targetState     BlueprintState? @relation("BPTimerTarget", fields: [targetStateId], references: [id], onDelete: SetNull)
+  notifyRoles     String   @default("[]") // JSON array
+  escalateTo      String?
+
+  @@index([stateId])
+}
+
+model BlueprintExecution {
+  id              String   @id @default(cuid())
+  organizationId  String
+  dealId          String
+  deal            Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  blueprintId     String
+  blueprint       Blueprint @relation(fields: [blueprintId], references: [id], onDelete: Cascade)
+  currentStateId  String?
+  currentState    BlueprintState? @relation(fields: [currentStateId], references: [id], onDelete: SetNull)
+  enteredStateAt  DateTime @default(now())
+  history         String   @default("[]") // JSON array of transitions
+  isComplete      Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([dealId])
+  @@index([organizationId, currentStateId])
+  @@index([organizationId, isComplete])
+}
+
+// ===========================================================================
+// Phase 10 — Rule Engine: Approvals, Validation, Assignment, Escalation
+// ===========================================================================
+
+model ApprovalProcess {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  targetModel     String   // deal|lead|contact|account|task|event
+  triggerCriteria String   @default("{}") // JSON
+  isActive        Boolean  @default(true)
+  version         Int      @default(1)
+  description     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  steps           ApprovalStep[]
+  requests        ApprovalRequest[]
+
+  @@index([organizationId, targetModel, isActive])
+}
+
+model ApprovalStep {
+  id              String   @id @default(cuid())
+  organizationId  String
+  processId       String
+  process         ApprovalProcess @relation(fields: [processId], references: [id], onDelete: Cascade)
+  order           Int
+  stepType        String   @default("sequential") // sequential|parallel|first_to_approve|majority_vote|unanimous
+  approvers       String   @default("[]") // JSON array of {type, value}
+  timeLimitHours  Int?
+  escalationApprover String? // JSON
+  requireComment  Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  requests        ApprovalRequest[]
+
+  @@index([processId, order])
+}
+
+model ApprovalRequest {
+  id              String   @id @default(cuid())
+  organizationId  String
+  processId       String
+  process         ApprovalProcess @relation(fields: [processId], references: [id], onDelete: Cascade)
+  targetModule    String
+  targetId        String
+  targetName      String
+  submittedById   String
+  submittedAt     DateTime @default(now())
+  currentStepId   String?
+  currentStep     ApprovalStep? @relation(fields: [currentStepId], references: [id], onDelete: SetNull)
+  status          String   @default("pending") // pending|approved|rejected|recalled|escalated
+  completedAt     DateTime?
+  comments        String   @default("[]") // JSON array
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  actions         ApprovalAction[]
+
+  @@index([organizationId, status])
+  @@index([organizationId, submittedById])
+  @@index([organizationId, targetModule, targetId])
+}
+
+model ApprovalAction {
+  id              String   @id @default(cuid())
+  organizationId  String
+  requestId       String
+  request         ApprovalRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  approverId      String
+  action          String   // approve|reject|delegate|escalate
+  comment         String?
+  timestamp       DateTime @default(now())
+
+  @@index([requestId, timestamp])
+}
+
+model ApprovalDelegation {
+  id              String   @id @default(cuid())
+  organizationId  String
+  userId          String
+  delegateToId    String
+  startDate       DateTime
+  endDate         DateTime
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+
+  @@index([organizationId, userId, isActive])
+}
+
+model ValidationRule {
+  id              String   @id @default(cuid())
+  organizationId  String
+  targetModel     String
+  fieldName       String
+  conditionType   String   @default("required") // required|regex|range|custom|unique
+  conditionValue  String   @default("{}") // JSON
+  errorMessage    String
+  errorSeverity   String   @default("error") // error|warning
+  triggerOn       String   @default("both") // create|update|both
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([organizationId, targetModel, isActive])
+}
+
+model AssignmentRule {
+  id              String   @id @default(cuid())
+  organizationId  String
+  targetModel     String
+  criteria        String   @default("{}") // JSON — legacy flat {field:value} OR {rows:[{field,operator,value}],logic}
+  strategy        String   @default("round_robin") // round_robin|lead_balance|territory|custom
+  assignTo        String   @default("[]") // JSON array of user ids
+  fallbackUserId  String?
+  territoryField  String?
+  isActive        Boolean  @default(true)
+  // Enhancement columns (additive, safe defaults) — rule naming, ordering,
+  // only-if-unassigned guard, notifications and usage stats.
+  name            String?   // human rule name (legacy rules keep NULL → UI shows strategy)
+  priority        Int?      // lower runs first (legacy rules keep NULL → after named priorities)
+  logic           String?   // AND | OR between criteria rows (legacy flat map is always AND)
+  onlyIfUnassigned Boolean  @default(false) // reassign only when owner is currently empty
+  notifyEmail     Boolean   @default(false) // email the assigned CSM
+  notifyInApp     Boolean   @default(false) // in-app notification for the assigned CSM
+  assignToRole    String?   // role id — pool = active members holding that role
+  lastTriggeredAt DateTime?
+  triggerCount    Int       @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  history         AssignmentHistory[]
+
+  @@index([organizationId, targetModel, isActive])
+}
+
+model AssignmentHistory {
+  id              String   @id @default(cuid())
+  organizationId  String
+  ruleId          String?
+  rule            AssignmentRule? @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+  recordModule    String
+  recordId        String
+  assignedToId    String
+  assignedAt      DateTime @default(now())
+
+  @@index([organizationId, recordModule, recordId])
+}
+
+model EscalationRule {
+  id              String   @id @default(cuid())
+  organizationId  String
+  targetModel     String
+  criteria        String   @default("{}") // JSON
+  timeLimitHours  Int
+  escalateTo      String   @default("{}") // JSON {type, value}
+  action          String   @default("notify") // reassign|notify|both
+  isActive        Boolean  @default(true)
+  // --- additive optional enrichment (rule-builder enhancement) ---
+  conditions      String?  // JSON — trigger condition rows [{field, operator, value}]
+  assigneeUserId  String?  // assign escalation to a specific user
+  assigneeRoleId  String?  // …or to a role (mutually exclusive with assigneeUserId in the UI)
+  priority        String?  // low|medium|high|urgent
+  warnAfterHours  Int?     // "warn after X hours" threshold (≤ timeLimitHours)
+  fallbackActions String?  // JSON — array of fallback action keys
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  logs            EscalationLog[]
+
+  @@index([organizationId, targetModel, isActive])
+}
+
+model EscalationLog {
+  id              String   @id @default(cuid())
+  organizationId  String
+  ruleId          String?
+  rule            EscalationRule? @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+  recordModule    String
+  recordId        String
+  escalatedToId   String?
+  actionTaken     String
+  createdAt       DateTime @default(now())
+
+  @@index([organizationId, createdAt])
+}
+
+// ===========================================================================
+// Phase 11 — Workflow Engine: WorkflowRule, WorkflowAction, WorkflowExecution
+// ===========================================================================
+
+model WorkflowRule {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  triggerType     String
+  triggerModel    String?
+  triggerConditions String @default("{}")
+  isActive        Boolean  @default(false)
+  version         Int      @default(1)
+  createdById     String
+  lastRunAt       DateTime?
+  runCount        Int      @default(0)
+  errorCount      Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  actions         WorkflowAction[]
+  executions      WorkflowExecution[]
+
+  @@index([organizationId, isActive, triggerType, triggerModel])
+}
+
+model WorkflowAction {
+  id              String   @id @default(cuid())
+  organizationId  String
+  ruleId          String
+  rule            WorkflowRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  order           Int
+  actionType      String
+  config          String   @default("{}")
+  createdAt       DateTime @default(now())
+
+  @@index([ruleId, order])
+}
+
+model WorkflowExecution {
+  id              String   @id @default(cuid())
+  organizationId  String
+  ruleId          String?
+  rule            WorkflowRule? @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+  targetModule    String
+  targetId        String
+  status          String   @default("running")
+  startedAt       DateTime @default(now())
+  completedAt     DateTime?
+  errorMessage    String?
+  actionsExecuted String   @default("[]")
+  createdAt       DateTime @default(now())
+
+  @@index([organizationId, ruleId, createdAt])
+  @@index([organizationId, status])
+}
+
+model ScheduledJob {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  cronExpression  String
+  actionType      String
+  config          String   @default("{}")
+  lastRunAt       DateTime?
+  nextRunAt       DateTime?
+  status          String   @default("active")
+  timezone        String   @default("UTC")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  logs            ScheduledJobLog[]
+
+  @@index([organizationId, status, nextRunAt])
+}
+
+model ScheduledJobLog {
+  id              String   @id @default(cuid())
+  organizationId  String
+  jobId           String?
+  job             ScheduledJob? @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  startedAt       DateTime @default(now())
+  completedAt     DateTime?
+  status          String   @default("running")
+  errorMessage    String?
+
+  @@index([jobId, startedAt])
+}
+
+// ===========================================================================
+// Phase 12 — Custom Functions: Scripting engine
+// ===========================================================================
+
+model CustomFunction {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  description     String?
+  language        String   @default("javascript") // python|javascript|visual
+  triggerEvent    String   @default("manual") // manual|webhook|workflow|scheduled|api
+  code            String   @default("")
+  version         Int      @default(1)
+  isActive        Boolean  @default(true)
+  isApproved      Boolean  @default(false)
+  createdById     String
+  lastExecutedAt  DateTime?
+  executionCount  Int      @default(0)
+  errorCount      Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  variables       CustomFunctionVariable[]
+  executions      CustomFunctionExecution[]
+  versions        CustomFunctionVersion[]
+
+  @@index([organizationId, isActive, triggerEvent])
+}
+
+model CustomFunctionVariable {
+  id              String   @id @default(cuid())
+  organizationId  String
+  functionId      String
+  function        CustomFunction @relation(fields: [functionId], references: [id], onDelete: Cascade)
+  name            String
+  varType         String   @default("input") // input|output
+  dataType        String   @default("string") // string|number|boolean|json|record
+  description     String?
+  defaultValue    String?
+  isRequired      Boolean  @default(false)
+
+  @@index([functionId, varType])
+}
+
+model CustomFunctionExecution {
+  id              String   @id @default(cuid())
+  organizationId  String
+  functionId      String?
+  function        CustomFunction? @relation(fields: [functionId], references: [id], onDelete: SetNull)
+  trigger         String   @default("manual") // workflow|manual|api|webhook|scheduled
+  inputData       String   @default("{}") // JSON
+  outputData      String?  // JSON
+  status          String   @default("running") // running|completed|failed
+  startedAt       DateTime @default(now())
+  completedAt     DateTime?
+  errorMessage    String?
+  logOutput       String   @default("")
+  executionTimeMs Int     @default(0)
+  createdAt       DateTime @default(now())
+
+  @@index([organizationId, functionId, startedAt])
+  @@index([organizationId, status])
+}
+
+model CustomFunctionVersion {
+  id              String   @id @default(cuid())
+  organizationId  String
+  functionId      String
+  function        CustomFunction @relation(fields: [functionId], references: [id], onDelete: Cascade)
+  version         Int
+  code            String
+  createdById     String
+  createdAt       DateTime @default(now())
+
+  @@unique([functionId, version])
+  @@index([functionId, version])
+}
+
+model KVStore {
+  id              String   @id @default(cuid())
+  organizationId  String
+  key             String
+  value           String
+  updatedAt       DateTime @updatedAt
+
+  @@unique([organizationId, key])
+  @@index([organizationId, key])
+}
+
+model HttpAllowlist {
+  id              String   @id @default(cuid())
+  organizationId  String
+  domain          String
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+
+  @@unique([organizationId, domain])
+  @@index([organizationId, isActive])
+}
+
+// ===========================================================================
+// Phase 13 — Email Integration & Telephony
+// ===========================================================================
+
+model EmailAccount {
+  id              String   @id @default(cuid())
+  organizationId  String
+  userId          String
+  provider        String   @default("gmail") // gmail|outlook|imap|exchange|yahoo|custom
+  emailAddress    String
+  credentials     String   @default("{}") // JSON (encrypted in prod)
+  authMode        String? // oauth | app-password — connection strategy for this mailbox
+  syncEnabled     Boolean  @default(true)
+  syncFrequency   Int      @default(2) // minutes
+  lastSyncedAt    DateTime?
+  lastSyncError   String? // last sync failure message (null = healthy)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  emails          Email[]
+
+  @@index([organizationId, userId, isActive])
+}
+
+model EmailThread {
+  id              String   @id @default(cuid())
+  organizationId  String
+  subject         String
+  relatedModule   String?
+  relatedId       String?
+  lastActivityAt  DateTime @default(now())
+  emailCount      Int      @default(0)
+  repliedAt       DateTime? // additive: set automatically when an inbound reply is detected
+  createdAt       DateTime @default(now())
+
+  emails          Email[]
+
+  @@index([organizationId, lastActivityAt])
+  @@index([organizationId, relatedModule, relatedId])
+}
+
+model Email {
+  id              String   @id @default(cuid())
+  organizationId  String
+  accountId       String?
+  account         EmailAccount? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  threadId        String?
+  thread          EmailThread? @relation(fields: [threadId], references: [id], onDelete: SetNull)
+  messageId       String?
+  fromAddress     String
+  toAddresses     String   @default("[]") // JSON array
+  cc              String   @default("[]") // JSON array
+  bcc             String   @default("[]") // JSON array
+  subject         String
+  bodyHtml        String   @default("")
+  bodyText        String   @default("")
+  attachments     String   @default("[]") // JSON array
+  direction       String   @default("outbound") // inbound|outbound
+  status          String   @default("draft") // draft|queued|sent|delivered|bounced|opened|clicked|spam
+  relatedModule   String?
+  relatedId       String?
+  isStarred       Boolean  @default(false)
+  isImportant     Boolean  @default(false)
+  hasAttachments  Boolean  @default(false)
+  labels          String   @default("[]") // JSON array
+  receivedAt      DateTime?
+  sentAt          DateTime?
+  openedAt        DateTime?
+  clickedAt       DateTime?
+  bouncedAt       DateTime?
+  bounceReason    String?
+  scheduledAt     DateTime?
+  snoozedUntil    DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tracking        EmailTracking[]
+
+  @@index([organizationId, threadId, receivedAt])
+  @@index([organizationId, status])
+  @@index([organizationId, relatedModule, relatedId])
+  @@index([organizationId, isStarred])
+}
+
+model EmailTracking {
+  id              String   @id @default(cuid())
+  organizationId  String
+  emailId         String
+  email           Email    @relation(fields: [emailId], references: [id], onDelete: Cascade)
+  event           String   // open|click|bounce|spam
+  url             String?
+  ip              String?
+  userAgent       String?
+  timestamp       DateTime @default(now())
+
+  @@index([emailId, timestamp])
+}
+
+model EmailSignature {
+  id              String   @id @default(cuid())
+  organizationId  String
+  userId          String
+  name            String
+  bodyHtml        String   @default("")
+  isDefault       Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([organizationId, userId, name])
+}
+
+model PhoneNumber {
+  id              String   @id @default(cuid())
+  organizationId  String
+  number          String
+  provider        String   @default("twilio") // twilio|exotel|vonage|plivo|msg91
+  capabilities    String   @default("{}") // JSON: {voice, sms, mms, whatsapp}
+  isActive        Boolean  @default(true)
+  region          String?
+  assignedToType  String?  // user|team|ivr
+  assignedToId    String?
+  friendlyName    String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([organizationId, isActive])
+}
+
+model TelephonyCall {
+  id              String   @id @default(cuid())
+  organizationId  String
+  fromNumber      String
+  toNumber        String
+  direction       String   @default("outbound") // inbound|outbound|missed
+  status          String   @default("ringing") // ringing|in_progress|completed|failed|busy|no_answer|voicemail
+  duration        Int      @default(0) // seconds
+  recordingUrl    String?
+  transcription   String?
+  sentiment       String?  // positive|neutral|negative
+  relatedModule   String?
+  relatedId       String?
+  ownerId         String
+  voipProvider    String   @default("twilio")
+  voipCallId      String?
+  startedAt       DateTime @default(now())
+  endedAt         DateTime?
+  notes           String?
+  outcome         String?  // connected|voicemail|no_answer|busy
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([organizationId, startedAt])
+  @@index([organizationId, relatedModule, relatedId])
+  @@index([organizationId, ownerId])
+}
+
+model SmsTemplate {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  body            String
+  variables       String   @default("[]") // JSON array
+  category        String   @default("transactional") // transactional|promotional|otp
+  isApproved      Boolean  @default(false) // DLT compliance
+  dltTemplateId   String?
+  maxLength       Int      @default(160)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  messages        SmsMessage[]
+
+  @@index([organizationId, category, isApproved])
+}
+
+model SmsMessage {
+  id              String   @id @default(cuid())
+  organizationId  String
+  fromNumber      String
+  toNumber        String
+  body            String
+  direction       String   @default("outbound") // inbound|outbound
+  status          String   @default("queued") // queued|sent|delivered|failed
+  templateId      String?
+  template        SmsTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  relatedModule   String?
+  relatedId       String?
+  segments        Int      @default(1)
+  cost            Float?
+  sentAt          DateTime?
+  deliveredAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([organizationId, sentAt])
+  @@index([organizationId, toNumber])
+}
+
+// ===========================================================================
+// Phase 14 — Omnichannel: WhatsApp, LiveChat, Social, Unified Inbox
+// ===========================================================================
+
+model WhatsAppAccount {
+  id              String   @id @default(cuid())
+  organizationId  String
+  phoneNumberId   String
+  wabaId          String
+  accessToken     String   @default("")
+  displayName     String
+  displayPhoneNumber String
+  qualityRating   String   @default("green")
+  isVerified      Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  messages        WhatsAppMessage[]
+
+  @@index([organizationId, isVerified])
+}
+
+model WhatsAppMessage {
+  id              String   @id @default(cuid())
+  organizationId  String
+  accountId       String?
+  account         WhatsAppAccount? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  fromPhone       String
+  toPhone         String
+  body            String   @default("")
+  mediaUrl        String?
+  messageType     String   @default("text")
+  status          String   @default("pending")
+  direction       String   @default("outbound")
+  relatedModule   String?
+  relatedId       String?
+  templateId      String?
+  errorCode       String?
+  errorMessage    String?
+  timestamp       DateTime @default(now())
+  createdAt       DateTime @default(now())
+
+  @@index([organizationId, fromPhone, timestamp])
+  @@index([organizationId, relatedModule, relatedId])
+}
+
+model WhatsAppTemplate {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  language        String   @default("en")
+  category        String   @default("transactional")
+  body            String
+  headerType      String?
+  headerText      String?
+  footerText      String?
+  buttons         String   @default("[]")
+  isApproved      Boolean  @default(false)
+  templateId      String?
+  createdAt       DateTime @default(now())
+
+  @@index([organizationId, isApproved])
+}
+
+model ChatSession {
+  id              String   @id @default(cuid())
+  organizationId  String
+  visitorId       String
+  visitorName     String?
+  visitorEmail    String?
+  visitorPhone    String?
+  visitorIp       String?
+  visitorGeo      String   @default("{}")
+  visitorUserAgent String?
+  pagesVisited    String   @default("[]")
+  referrer        String?
+  assignedToId    String?
+  status          String   @default("waiting") // waiting|active|ended
+  relatedModule   String?
+  relatedId       String?
+  startedAt       DateTime @default(now())
+  endedAt         DateTime?
+  satisfactionScore Int?
+  transcript      String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  messages        ChatMessage[]
+
+  @@index([organizationId, status])
+  @@index([organizationId, assignedToId])
+}
+
+model ChatMessage {
+  id              String   @id @default(cuid())
+  organizationId  String
+  sessionId       String
+  session         ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sender          String   // visitor|agent|bot
+  body            String
+  attachments     String   @default("[]")
+  timestamp       DateTime @default(now())
+  isRead          Boolean  @default(false)
+
+  @@index([sessionId, timestamp])
+}
+
+model SocialAccount {
+  id              String   @id @default(cuid())
+  organizationId  String
+  provider        String   // twitter|linkedin|facebook|instagram
+  handle          String
+  accessToken     String   @default("")
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  mentions        SocialMention[]
+
+  @@index([organizationId, provider, isActive])
+}
+
+model SocialMention {
+  id              String   @id @default(cuid())
+  organizationId  String
+  accountId       String?
+  account         SocialAccount? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  provider        String
+  messageId       String
+  author          String
+  authorHandle    String
+  body            String
+  media           String   @default("[]")
+  url             String?
+  sentiment       String?  // positive|neutral|negative
+  isRead          Boolean  @default(false)
+  assignedToId    String?
+  relatedModule   String?
+  relatedId       String?
+  createdAt       DateTime @default(now())
+  respondedAt     DateTime?
+
+  @@index([organizationId, provider, createdAt])
+  @@index([organizationId, isRead])
+}
+
+model UnifiedConversation {
+  id              String   @id @default(cuid())
+  organizationId  String
+  channel         String   // email|whatsapp|telephony|livechat|social|sms
+  externalId      String?
+  subject         String?
+  participantName String
+  participantIdentifier String
+  assignedToId    String?
+  status          String   @default("open") // open|pending|resolved|closed
+  priority        String   @default("normal") // low|normal|high|urgent
+  slaResponseDeadline DateTime?
+  slaResolutionDeadline DateTime?
+  tags            String   @default("[]")
+  internalNotes   String   @default("[]")
+  relatedModule   String?
+  relatedId       String?
+  isMerged        Boolean  @default(false)
+  mergedIntoId    String?
+  lastMessageAt   DateTime @default(now())
+  messageCount    Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  messages        UnifiedMessage[]
+
+  @@index([organizationId, channel, status])
+  @@index([organizationId, assignedToId])
+  @@index([organizationId, lastMessageAt])
+}
+
+model UnifiedMessage {
+  id              String   @id @default(cuid())
+  organizationId  String
+  conversationId  String
+  conversation    UnifiedConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  channel         String
+  sender          String   // customer|agent|bot|system
+  body            String
+  attachments     String   @default("[]")
+  timestamp       DateTime @default(now())
+  isRead          Boolean  @default(false)
+  metadata        String   @default("{}")
+
+  @@index([conversationId, timestamp])
+}
+
+model InboxMacro {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  actions         String   @default("[]") // JSON
+  createdById     String
+  createdAt       DateTime @default(now())
+
+  @@index([organizationId])
+}
+
+// ===========================================================================
+// Phase 15 — Reports Builder & Analytics
+// ===========================================================================
+
+model Report {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  description     String?
+  sourceModel     String   @default("deal")
+  reportType      String   @default("tabular")
+  fields          String   @default("[]")
+  filters         String   @default("{}")
+  groupBy         String   @default("[]")
+  orderBy         String   @default("[]")
+  aggregates      String   @default("[]")
+  having          String   @default("{}")
+  limit           Int      @default(100)
+  offset          Int      @default(0)
+  chartType       String   @default("none")
+  chartConfig     String   @default("{}")
+  scheduleCron    String?
+  sharedWith      String   @default("[]")
+  folderId        String?
+  isActive        Boolean  @default(true)
+  isPublished     Boolean  @default(false)
+  createdById     String
+  lastRunAt       DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  executions      ReportExecution[]
+  subscriptions   ReportSubscription[]
+
+  @@index([organizationId, isActive, isPublished])
+  @@index([organizationId, createdById])
+}
+
+model ReportFolder {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  parentId        String?
+  createdById     String
+  createdAt       DateTime @default(now())
+
+  @@index([organizationId, parentId])
+}
+
+model ReportSubscription {
+  id              String   @id @default(cuid())
+  organizationId  String
+  reportId        String
+  report          Report   @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  userId          String
+  emailOnRun      Boolean  @default(true)
+  createdAt       DateTime @default(now())
+
+  @@unique([reportId, userId])
+}
+
+model ReportExecution {
+  id              String   @id @default(cuid())
+  organizationId  String
+  reportId        String?
+  report          Report?  @relation(fields: [reportId], references: [id], onDelete: SetNull)
+  executedById    String
+  status          String   @default("running")
+  rowCount        Int      @default(0)
+  executionTimeMs Int      @default(0)
+  resultData      String?
+  errorMessage    String?
+  startedAt       DateTime @default(now())
+  completedAt     DateTime?
+
+  @@index([reportId, startedAt])
+}
+
+// ===========================================================================
+// Phase 16 — Dashboards, Forecasting & Goals
+// ===========================================================================
+
+model Dashboard {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  layout          String   @default("{}")
+  filters         String   @default("{}")
+  refreshInterval Int      @default(300)
+  sharedWith      String   @default("[]")
+  isDefault       Boolean  @default(false)
+  createdById     String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  widgets         DashboardWidget[]
+
+  @@index([organizationId, isDefault])
+  @@index([organizationId, createdById])
+}
+
+model DashboardWidget {
+  id              String   @id @default(cuid())
+  organizationId  String
+  dashboardId     String
+  dashboard       Dashboard @relation(fields: [dashboardId], references: [id], onDelete: Cascade)
+  widgetType      String   @default("kpi")
+  title           String
+  position        String   @default("{}")
+  colorTheme      String   @default("default")
+  customConfig    String   @default("{}")
+  order           Int      @default(0)
+  createdAt       DateTime @default(now())
+
+  @@index([dashboardId, order])
+}
+
+model Forecast {
+  id              String   @id @default(cuid())
+  organizationId  String
+  userId          String
+  periodType      String   @default("monthly") // weekly|monthly|quarterly|yearly
+  periodStart     DateTime
+  periodEnd       DateTime
+  category        String   @default("pipeline") // pipeline|best_case|commit|closed|omitted
+  amount          Float    @default(0)
+  overrideAmount  Float?
+  notes           String?
+  submittedAt     DateTime?
+  approvedById    String?
+  approvedAt      DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([organizationId, userId, periodType, periodStart])
+  @@index([organizationId, periodStart])
+}
+
+model Goal {
+  id              String   @id @default(cuid())
+  organizationId  String
+  ownerType       String   @default("user") // user|team|org
+  ownerId         String
+  metric          String   @default("revenue") // revenue|deals_closed|calls_made|emails_sent|meetings_held|leads_created
+  periodType      String   @default("monthly") // daily|weekly|monthly|quarterly|yearly
+  periodStart     DateTime
+  periodEnd       DateTime
+  targetAmount    Float    @default(0)
+  actualAmount    Float    @default(0)
+  isActive        Boolean  @default(true)
+  parentGoalId    String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([organizationId, ownerType, ownerId, periodStart])
+  @@index([organizationId, metric, periodType])
+}
+
+model GoalAchievement {
+  id              String   @id @default(cuid())
+  organizationId  String
+  userId          String
+  badgeType       String   // first_deal|100k_deals|100_calls_week|top_performer_month
+  awardedAt       DateTime @default(now())
+  createdAt       DateTime @default(now())
+
+  @@unique([organizationId, userId, badgeType])
+  @@index([organizationId, userId])
+}
+
+// ===========================================================================
+// Phase 17 — Customization Engine
+// ===========================================================================
+
+model CustomModule {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  pluralName      String
+  slug            String
+  icon            String   @default("Box")
+  color           String   @default("#3b82f6")
+  recordNameField String   @default("name")
+  isActive        Boolean  @default(true)
+  isSystem        Boolean  @default(false)
+  // Module builder enhancements (additive, safe JSON defaults)
+  sectionsConfig  String   @default("{}")  // JSON: ordered sections [{name, columns: 1|2, collapsible}]
+  viewsConfig     String   @default("[]")  // JSON: named custom views [{name, filters}]
+  recordNameFormat String? // "field" (default) | "auto" — auto generates PREFIX-#### record names
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  fields          CustomModuleField[]
+  records         CustomModuleRecord[]
+  parentRelations CustomModuleRelation[] @relation("CustomModuleParent")
+  childRelations  CustomModuleRelation[] @relation("CustomModuleChild")
+
+  @@unique([organizationId, slug])
+  @@index([organizationId, isActive])
+}
+
+// Related lists — link two custom modules so child records surface on the
+// parent record's detail view. one_to_many stores the parent record id in the
+// child's data[childFieldApiName]; many_to_many stores an array of parent ids.
+model CustomModuleRelation {
+  id                String   @id @default(cuid())
+  organizationId    String
+  parentModuleId    String
+  parentModule      CustomModule @relation("CustomModuleParent", fields: [parentModuleId], references: [id], onDelete: Cascade)
+  childModuleId     String
+  childModule       CustomModule @relation("CustomModuleChild", fields: [childModuleId], references: [id], onDelete: Cascade)
+  name              String
+  childFieldApiName String
+  type              String   @default("one_to_many") // one_to_many | many_to_many
+  createdAt         DateTime @default(now())
+
+  @@index([organizationId, parentModuleId])
+  @@index([childModuleId])
+}
+
+model CustomModuleField {
+  id              String   @id @default(cuid())
+  organizationId  String
+  moduleId        String
+  module          CustomModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  label           String
+  apiName         String
+  fieldType       String   @default("text")
+  fieldOptions    String   @default("{}")
+  defaultValue    String?
+  isRequired      Boolean  @default(false)
+  isUnique        Boolean  @default(false)
+  isSearchable    Boolean  @default(true)
+  displayOrder    Int      @default(0)
+  section         String?
+  // Field property enhancements (additive, safe defaults)
+  helpText        String?   // tooltip / help text shown in the record form
+  isReadOnly      Boolean   @default(false)
+  dependency      String?   // JSON {field, value} — show this field only when dependency matches
+  createdAt       DateTime @default(now())
+
+  @@unique([moduleId, apiName])
+  @@index([moduleId, displayOrder])
+}
+
+model CustomModuleRecord {
+  id              String   @id @default(cuid())
+  organizationId  String
+  moduleId        String
+  module          CustomModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  data            String   @default("{}")
+  createdById     String? // additive: auto-tracked user, nullable
+  modifiedById    String? // additive: auto-tracked user, nullable
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([moduleId])
+}
+
+model Layout {
+  id              String   @id @default(cuid())
+  organizationId  String
+  module          String
+  profileId       String?
+  name            String
+  config          String   @default("{}")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  sections        LayoutSection[]
+
+  @@index([organizationId, module])
+}
+
+model LayoutSection {
+  id              String   @id @default(cuid())
+  organizationId  String
+  layoutId        String
+  layout          Layout   @relation(fields: [layoutId], references: [id], onDelete: Cascade)
+  name            String
+  columns         Int      @default(2)
+  order           Int      @default(0)
+  isCollapsible   Boolean  @default(true)
+  createdAt       DateTime @default(now())
+
+  @@index([layoutId, order])
+}
+
+model RoleProfile {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  description     String?
+  isStandard      Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  permissions     ProfilePermission[]
+  fieldPermissions FieldPermission[]
+
+  @@index([organizationId])
+}
+
+model ProfilePermission {
+  id              String   @id @default(cuid())
+  organizationId  String
+  profileId       String
+  profile         RoleProfile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  module          String
+  canView         Boolean  @default(true)
+  canCreate       Boolean  @default(true)
+  canEdit         Boolean  @default(true)
+  canDelete       Boolean  @default(false)
+  canExport       Boolean  @default(true)
+  canShare        Boolean  @default(true)
+
+  @@unique([profileId, module])
+}
+
+model FieldPermission {
+  id              String   @id @default(cuid())
+  organizationId  String
+  profileId       String
+  profile         RoleProfile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  module          String
+  fieldName       String
+  access          String   @default("editable") // hidden|visible|read_only|editable
+
+  @@index([profileId, module])
+}
+
+model Territory {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  rules           String   @default("{}")
+  managerId       String?
+  parentTerritoryId String?
+  parentTerritory Territory? @relation("TerritoryHierarchy", fields: [parentTerritoryId], references: [id], onDelete: SetNull)
+  children        Territory[] @relation("TerritoryHierarchy")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  members         TerritoryMember[]
+
+  @@index([organizationId, parentTerritoryId])
+}
+
+model TerritoryMember {
+  id              String   @id @default(cuid())
+  organizationId  String
+  territoryId     String
+  territory       Territory @relation(fields: [territoryId], references: [id], onDelete: Cascade)
+  userId          String
+
+  @@unique([territoryId, userId])
+  @@index([territoryId])
+}
+
+model CanvasTheme {
+  id              String   @id @default(cuid())
+  organizationId  String   @unique
+  // Defaults MUST mirror the app's native brand (navy sidebar "colored" look,
+  // Geist font, medium radius) — the theme applier clears any value equal to
+  // these, so a freshly auto-created row is a visual no-op. Misaligned defaults
+  // here previously repainted the whole app blue with an invisible sidebar.
+  primaryColor    String   @default("#223558")
+  accentColor     String   @default("#3b82f6")
+  fontFamily      String   @default("Geist")
+  borderRadius    String   @default("medium")
+  density         String   @default("comfortable")
+  sidebarStyle    String   @default("colored")
+  logoUrl         String?
+  customCss       String?
+  loginPageBg     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model EmailTemplate {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  subject         String
+  bodyHtml        String   @default("")
+  category        String   @default("general")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([organizationId, category])
+}
+
+model PdfTemplate {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  htmlTemplate    String   @default("")
+  css             String   @default("")
+  category        String   @default("quote") // quote|invoice|contract|proposal
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([organizationId, category])
+}
+
+// ===========================================================================
+// Phase 18 — AI Layer
+// ===========================================================================
+
+model LeadScore {
+  id              String   @id @default(cuid())
+  organizationId  String
+  leadId          String
+  score           Int      @default(0)
+  factors         String   @default("{}")
+  modelVersion    String   @default("heuristic-v1")
+  calculatedAt    DateTime @default(now())
+  createdAt       DateTime @default(now())
+
+  @@unique([organizationId, leadId])
+  @@index([organizationId, leadId])
+}
+
+model PredictedDealValue {
+  id              String   @id @default(cuid())
+  organizationId  String
+  dealId          String
+  expectedValue   Float    @default(0)
+  closeProbability Float   @default(0)
+  expectedCloseDate DateTime?
+  factors         String   @default("{}")
+  modelVersion    String   @default("heuristic-v1")
+  calculatedAt    DateTime @default(now())
+  createdAt       DateTime @default(now())
+
+  @@unique([organizationId, dealId])
+  @@index([organizationId, dealId])
+}
+
+model Anomaly {
+  id              String   @id @default(cuid())
+  organizationId  String
+  recordType      String
+  recordId        String
+  anomalyType     String
+  severity        String   @default("medium") // low|medium|high|critical
+  description     String
+  acknowledgedById String?
+  acknowledgedAt  DateTime?
+  status          String   @default("open") // open|acknowledged|resolved
+  createdAt       DateTime @default(now())
+
+  @@index([organizationId, status])
+  @@index([organizationId, createdAt])
+}
+
+model Sentiment {
+  id              String   @id @default(cuid())
+  organizationId  String
+  recordModule    String
+  recordId        String
+  sentiment       Float    @default(0) // -1.0 to 1.0
+  confidence      Float    @default(0)
+  modelVersion    String   @default("heuristic-v1")
+  analyzedAt      DateTime @default(now())
+  createdAt       DateTime @default(now())
+
+  @@index([organizationId, recordModule, recordId])
+}
+
+model SmartSuggestion {
+  id              String   @id @default(cuid())
+  organizationId  String
+  userId          String
+  suggestionType  String   @default("next_best_action")
+  title           String
+  description     String
+  targetModule    String?
+  targetId        String?
+  priority        Int      @default(0)
+  isDismissed     Boolean  @default(false)
+  isAccepted      Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  @@index([organizationId, userId, isDismissed])
+}
+
+model ZiaConversation {
+  id              String   @id @default(cuid())
+  organizationId  String
+  userId          String
+  messages        String   @default("[]") // JSON array
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([organizationId, userId, updatedAt])
+}
+
+model NLPQuery {
+  id              String   @id @default(cuid())
+  organizationId  String
+  userId          String
+  question        String
+  generatedSpec   String   @default("{}") // JSON
+  resultSummary   String   @default("")
+  createdAt       DateTime @default(now())
+
+  @@index([organizationId, createdAt])
+}
+
+model AIWriterDraft {
+  id              String   @id @default(cuid())
+  organizationId  String
+  userId          String
+  draftType       String   @default("email") // email|blog|social|summary|proposal
+  prompt          String
+  generatedContent String  @default("")
+  style           String   @default("professional")
+  tone            String   @default("friendly")
+  createdAt       DateTime @default(now())
+
+  @@index([organizationId, userId, createdAt])
+}
+
+model AIAgentRun {
+  id              String   @id @default(cuid())
+  organizationId  String
+  agentType       String   // lead_research|deal_coach|email_triage|data_hygiene|customer_success
+  targetModule    String
+  targetId        String
+  status          String   @default("running") // running|completed|failed
+  result          String   @default("{}")
+  startedAt       DateTime @default(now())
+  completedAt     DateTime?
+
+  @@index([organizationId, agentType, startedAt])
+}
+
+model AICostLog {
+  id              String   @id @default(cuid())
+  organizationId  String
+  model           String   @default("gpt-4o-mini")
+  inputTokens     Int      @default(0)
+  outputTokens    Int      @default(0)
+  cost            Float    @default(0)
+  taskType        String   @default("chat")
+  createdAt       DateTime @default(now())
+
+  @@index([organizationId, createdAt])
+}
+
+// ===========================================================================
+// Phase 19 — Integrations, Marketplace & Ecosystem Apps
+// ===========================================================================
+
+model Extension {
+  id              String   @id @default(cuid())
+  name            String
+  developer       String
+  version         String   @default("1.0.0")
+  description     String?
+  category        String   @default("general")
+  pricing         String   @default("free")
+  isVerified      Boolean  @default(false)
+  isFeatured      Boolean  @default(false)
+  downloads       Int      @default(0)
+  installedBy     InstalledExtension[]
+  rating          Float    @default(0)
+  installUrl      String?
+  permissions     String   @default("[]")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([category, isFeatured])
+}
+
+model InstalledExtension {
+  id              String   @id @default(cuid())
+  organizationId  String
+  extensionId     String
+  extension       Extension @relation(fields: [extensionId], references: [id], onDelete: Cascade)
+  config          String   @default("{}")
+  status          String   @default("active")
+  installedAt     DateTime @default(now())
+  lastSyncedAt    DateTime?
+
+  @@unique([organizationId, extensionId])
+  @@index([organizationId, status])
+}
+
+model Invoice {
+  id              String   @id @default(cuid())
+  organizationId  String
+  customerName    String
+  customerEmail   String?
+  invoiceNumber   String
+  issueDate       DateTime @default(now())
+  dueDate         DateTime?
+  subtotal        Float    @default(0)
+  tax             Float    @default(0)
+  total           Float    @default(0)
+  status          String   @default("draft")
+  lineItems       String   @default("[]")
+  notes           String?
+  isSeed          Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  payments        Payment[]
+
+  @@index([organizationId, status])
+}
+
+model Estimate {
+  id              String   @id @default(cuid())
+  organizationId  String
+  customerName    String
+  customerEmail   String?
+  estimateNumber  String
+  issueDate       DateTime @default(now())
+  dueDate         DateTime?
+  subtotal        Float    @default(0)
+  tax             Float    @default(0)
+  total           Float    @default(0)
+  status          String   @default("draft")
+  lineItems       String   @default("[]")
+  notes           String?
+  createdAt       DateTime @default(now())
+}
+
+model Payment {
+  id              String   @id @default(cuid())
+  organizationId  String
+  invoiceId       String?
+  invoice         Invoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  amount          Float    @default(0)
+  method          String   @default("card")
+  paidAt          DateTime @default(now())
+  reference       String?
+  createdAt       DateTime @default(now())
+
+  @@index([organizationId, invoiceId])
+}
+
+model Ticket {
+  id              String   @id @default(cuid())
+  organizationId  String
+  subject         String
+  description     String?
+  status          String   @default("open")
+  priority        String   @default("normal")
+  category        String?
+  requesterName   String
+  requesterEmail  String?
+  assignedToId    String?
+  slaDeadline     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  replies         TicketReply[]
+
+  @@index([organizationId, status])
+}
+
+model TicketReply {
+  id              String   @id @default(cuid())
+  organizationId  String
+  ticketId        String
+  ticket          Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  authorId        String
+  body            String
+  isInternal      Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  @@index([ticketId, createdAt])
+}
+
+model Project {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  description     String?
+  status          String   @default("active")
+  startDate       DateTime?
+  endDate         DateTime?
+  managerId       String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tasks           ProjectTask[]
+  timeEntries     TimeEntry[]
+
+  @@index([organizationId, status])
+}
+
+model ProjectTask {
+  id              String   @id @default(cuid())
+  organizationId  String
+  projectId       String
+  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title           String
+  description     String?
+  status          String   @default("todo")
+  assigneeId      String?
+  dueDate         DateTime?
+  estimatedHours  Float    @default(0)
+  actualHours     Float    @default(0)
+  createdAt       DateTime @default(now())
+
+  @@index([projectId, status])
+}
+
+model TimeEntry {
+  id              String   @id @default(cuid())
+  organizationId  String
+  projectId       String
+  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  taskId          String?
+  userId          String
+  hours           Float    @default(0)
+  description     String?
+  date            DateTime @default(now())
+  isBillable      Boolean  @default(true)
+  createdAt       DateTime @default(now())
+
+  @@index([projectId, date])
+}
+
+model Campaign {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  type            String   @default("email") // email|webinar|conference|ads|referral|social|other
+  status          String   @default("draft") // draft|active|completed|cancelled
+  description     String?
+  budget          Float    @default(0)
+  expectedRevenue Float    @default(0)
+  startDate       DateTime?
+  endDate         DateTime?
+  // Audience members as JSON: [{ module: 'lead'|'contact', id, name, status }]
+  members         String   @default("[]")
+  ownerId         String
+  metrics         String   @default("{}")
+  deletedAt       DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  emails          MarketingEmail[]
+  owner           User     @relation("CampaignOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, status])
+  @@index([organizationId, deletedAt])
+}
+
+model MarketingEmail {
+  id              String   @id @default(cuid())
+  organizationId  String
+  campaignId      String
+  campaign        Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  subject         String
+  bodyHtml        String   @default("")
+  sentCount       Int      @default(0)
+  openCount       Int      @default(0)
+  clickCount      Int      @default(0)
+  createdAt       DateTime @default(now())
+
+  @@index([campaignId])
+}
+
+model Employee {
+  id              String   @id @default(cuid())
+  organizationId  String
+  userId          String?
+  name            String
+  email           String
+  department      String?
+  designation     String?
+  joinDate        DateTime?
+  status          String   @default("active")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([organizationId, status])
+}
+
+model LeaveRequest {
+  id              String   @id @default(cuid())
+  organizationId  String
+  employeeId      String
+  type            String   @default("annual")
+  startDate       DateTime
+  endDate         DateTime
+  status          String   @default("pending")
+  reason          String?
+  createdAt       DateTime @default(now())
+
+  @@index([organizationId, employeeId, status])
+}
+
+model ExpenseClaim {
+  id              String   @id @default(cuid())
+  organizationId  String
+  employeeId      String
+  amount          Float    @default(0)
+  category        String?
+  description     String?
+  status          String   @default("pending")
+  receiptUrl      String?
+  createdAt       DateTime @default(now())
+
+  @@index([organizationId, employeeId, status])
+}
+
+model Integration {
+  id              String   @id @default(cuid())
+  organizationId  String
+  provider        String
+  isConnected     Boolean  @default(false)
+  config          String   @default("{}")
+  lastSyncedAt    DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([organizationId, provider])
+  logs            IntegrationLog[]
+}
+
+model IntegrationLog {
+  id              String   @id @default(cuid())
+  organizationId  String
+  integrationId   String
+  integration     Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  event           String
+  status          String   @default("info")
+  details         String?
+  createdAt       DateTime @default(now())
+
+  @@index([integrationId, createdAt])
+}
+
+// ===========================================================================
+// Phase 20 — Security, Audit, Compliance, Backup
+// ===========================================================================
+
+model AuditLogEntry {
+  id              String   @id @default(cuid())
+  organizationId  String
+  actorId         String?
+  action          String
+  targetType      String?
+  targetId        String?
+  changes         String   @default("{}")
+  ip              String?
+  userAgent       String?
+  timestamp       DateTime @default(now())
+
+  @@index([organizationId, timestamp])
+  @@index([organizationId, targetType, targetId])
+  @@index([organizationId, action, timestamp])
+}
+
+model ComplianceChecklistItem {
+  id              String   @id @default(cuid())
+  organizationId  String
+  framework       String   @default("SOC2")
+  item            String
+  status          String   @default("pending") // pending|met|not_applicable
+  evidence        String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([organizationId, framework, status])
+}
+
+model OnboardingStep {
+  id              String   @id @default(cuid())
+  organizationId  String
+  userId          String
+  step            String
+  isCompleted     Boolean  @default(false)
+  completedAt     DateTime?
+  createdAt       DateTime @default(now())
+
+  @@unique([organizationId, userId, step])
+}
+
+model SystemHealthMetric {
+  id              String   @id @default(cuid())
+  organizationId  String
+  metric          String
+  value           Float    @default(0)
+  unit            String   @default("")
+  timestamp       DateTime @default(now())
+
+  @@index([organizationId, metric, timestamp])
+}
+
+// ---------------------------------------------------------------------------
+// Inventory / CPQ suite (Zoho CRM parity): Products, Price Books, Vendors,
+// Quotes, Sales Orders, Purchase Orders. Line items are stored as JSON string
+// columns (same convention as phones/addresses): [{ productId, name, qty,
+// rate, discountPct, taxPct, total }]; totals are recomputed server-side on
+// every write so clients can never persist inflated numbers.
+// ---------------------------------------------------------------------------
+
+model Product {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  productCode     String?
+  category        String?
+  unit            String?  // e.g. Each, Box, Hour, License
+  unitPrice       Float    @default(0)
+  taxPercent      Float    @default(0)
+  active          Boolean  @default(true)
+  description     String?
+  ownerId         String
+  deletedAt       DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  owner           User     @relation("ProductOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  priceBookEntries PriceBookEntry[]
+
+  @@index([organizationId, deletedAt])
+  @@index([organizationId, active])
+}
+
+model PriceBook {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  description     String?
+  active          Boolean  @default(true)
+  ownerId         String
+  deletedAt       DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  owner           User     @relation("PriceBookOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  entries         PriceBookEntry[]
+
+  @@index([organizationId, deletedAt])
+}
+
+model PriceBookEntry {
+  id              String   @id @default(cuid())
+  organizationId  String
+  priceBookId     String
+  priceBook       PriceBook @relation(fields: [priceBookId], references: [id], onDelete: Cascade)
+  productId       String
+  product         Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  price           Float
+  createdAt       DateTime @default(now())
+
+  @@unique([priceBookId, productId])
+  @@index([organizationId])
+}
+
+model Vendor {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  category        String?  // supplier|manufacturer|distributor|service|other
+  emails          String   @default("[]")
+  phones          String   @default("[]")
+  website         String?
+  address         String   @default("{}")
+  description     String?
+  ownerId         String
+  deletedAt       DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  owner           User     @relation("VendorOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  purchaseOrders  PurchaseOrder[]
+
+  @@index([organizationId, deletedAt])
+}
+
+model Quote {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  accountId       String?
+  contactId       String?
+  dealId          String?
+  status          String   @default("draft") // draft|sent|accepted|declined|expired
+  validUntil      DateTime?
+  items           String   @default("[]")
+  subtotal        Float    @default(0)
+  discountTotal   Float    @default(0)
+  taxTotal        Float    @default(0)
+  grandTotal      Float    @default(0)
+  currency        String   @default("INR")
+  terms           String?
+  description     String?
+  ownerId         String
+  deletedAt       DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  owner           User     @relation("QuoteOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, deletedAt])
+  @@index([organizationId, status])
+}
+
+model SalesOrder {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  accountId       String?
+  contactId       String?
+  dealId          String?
+  status          String   @default("draft") // draft|confirmed|delivered|cancelled
+  items           String   @default("[]")
+  subtotal        Float    @default(0)
+  discountTotal   Float    @default(0)
+  taxTotal        Float    @default(0)
+  grandTotal      Float    @default(0)
+  currency        String   @default("INR")
+  terms           String?
+  description     String?
+  ownerId         String
+  deletedAt       DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  owner           User     @relation("SalesOrderOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, deletedAt])
+  @@index([organizationId, status])
+}
+
+model PurchaseOrder {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  vendorId        String?
+  vendor          Vendor?  @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  status          String   @default("draft") // draft|issued|received|cancelled
+  items           String   @default("[]")
+  subtotal        Float    @default(0)
+  discountTotal   Float    @default(0)
+  taxTotal        Float    @default(0)
+  grandTotal      Float    @default(0)
+  currency        String   @default("INR")
+  terms           String?
+  description     String?
+  ownerId         String
+  deletedAt       DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  owner           User     @relation("PurchaseOrderOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, deletedAt])
+  @@index([organizationId, status])
+}
+
+// --- Record tags (Zoho-style colored tags on leads/contacts/accounts/deals) -
+
+model Tag {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  color           String   @default("slate")
+  createdAt       DateTime @default(now())
+
+  links           TagLink[]
+
+  @@unique([organizationId, name])
+}
+
+model TagLink {
+  id              String   @id @default(cuid())
+  organizationId  String
+  tagId           String
+  tag             Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  module          String   // lead|contact|account|deal
+  recordId        String
+  createdAt       DateTime @default(now())
+
+  @@unique([tagId, module, recordId])
+  @@index([organizationId, module, recordId])
+}

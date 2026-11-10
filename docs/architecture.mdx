@@ -1,0 +1,35 @@
+---
+title: Architecture
+description: Monorepo structure and how the pieces fit together.
+---
+
+# Architecture
+
+The platform is a monorepo orchestrated by **Turborepo** (JS) and **uv**
+(Python), with **Docker Compose** for local development.
+
+```
+backend/   Django + DRF + Celery + Channels
+frontend/  Next.js 16 + TypeScript + shadcn/ui
+mobile/    React Native (Expo)
+infra/     Terraform modules (VPC, RDS, ElastiCache, S3, CloudFront, EKS)
+docs/      Mintlify portal
+scripts/   utility scripts
+```
+
+## Data flow
+
+```
+Client (web/mobile) ──▶ CloudFront ──▶ Next.js (RSC) ──▶ Django API
+                                              │              │
+                                              ▼              ▼
+                                          Redis ◀────── Postgres
+                                              │
+                                              ▼
+                                          Celery workers ──▶ S3 / Meilisearch
+```
+
+## Deployment
+
+ArgoCD watches the `main` branch and reconciles Kubernetes manifests into EKS.
+Promotion to production is a manual approve.

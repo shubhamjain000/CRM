@@ -1,0 +1,50 @@
+[
+  {
+    "peer": "15557654321@s.whatsapp.net",
+    "name": "Demo Echo",
+    "lastMessage": "Demo session started. Send a message and the demo contact will echo it back in about a second.",
+    "lastTimestamp": 1793615633075,
+    "unreadCount": 0,
+    "messageCount": 3
+  },
+  {
+    "peer": "15551234567@s.whatsapp.net",
+    "name": "Ava Martinez",
+    "lastMessage": "Perfect, see you then!",
+    "lastTimestamp": 1793615151873,
+    "unreadCount": 0,
+    "messageCount": 3
+  },
+  {
+    "peer": "15559876543@s.whatsapp.net",
+    "name": "Liam Chen",
+    "lastMessage": "Sent — check your email.",
+    "lastTimestamp": 1793605131873,
+    "unreadCount": 0,
+    "messageCount": 2
+  },
+  {
+    "peer": "919876543210@s.whatsapp.net",
+    "name": "Priya Sharma",
+    "lastMessage": "Quick question about the API limits…",
+    "lastTimestamp": 1793530431873,
+    "unreadCount": 0,
+    "messageCount": 3
+  },
+  {
+    "peer": "447700900123@s.whatsapp.net",
+    "name": "Noah Williams",
+    "lastMessage": "Got it, thanks for the quick turnaround 👍",
+    "lastTimestamp": 1793442831873,
+    "unreadCount": 0,
+    "messageCount": 1
+  },
+  {
+    "peer": "0@s.whatsapp.net",
+    "name": "WhatsApp Business",
+    "lastMessage": "",
+    "lastTimestamp": 1792490761000,
+    "unreadCount": 0,
+    "messageCount": 1
+  }
+]

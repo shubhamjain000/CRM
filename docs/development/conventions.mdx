@@ -1,0 +1,26 @@
+---
+title: Conventions
+description: Commit, branch, and code conventions.
+---
+
+# Conventions
+
+## Commits
+
+Conventional Commits are enforced by commitlint + pre-commit.
+
+```
+feat(auth): add magic-link login
+fix(api): handle null user in /me
+docs(readme): document make dev
+```
+
+## Releases
+
+`semantic-release` derives versions from commit history on `main`. No manual
+version bumps.
+
+## Branches
+
+- `main` — protected; CI must pass; reviews required.
+- `feat/*`, `fix/*` — short-lived feature branches off `main`.

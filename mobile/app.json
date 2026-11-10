@@ -1,0 +1,35 @@
+{
+  "expo": {
+    "name": "Unstop CRM",
+    "slug": "unstop-crm",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "scheme": "unstopcrm",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#223558"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.unstop.crm",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Attach photos to CRM records.",
+        "NSPhotoLibraryUsageDescription": "Attach existing photos to CRM records."
+      }
+    },
+    "android": {
+      "package": "com.unstop.crm",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#223558"
+      }
+    },
+    "extra": {
+      "eas": {
+        "projectId": ""
+      }
+    }
+  }
+}

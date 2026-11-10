@@ -1,0 +1,19 @@
+{
+  "name": "Foundation Docs",
+  "logo": "/logo.svg",
+  "navigation": [
+    {
+      "group": "Getting Started",
+      "pages": ["introduction", "quickstart", "architecture"]
+    },
+    {
+      "group": "Development",
+      "pages": ["development/local-dev", "development/conventions", "development/cicd"]
+    },
+    {
+      "group": "Infrastructure",
+      "pages": ["infrastructure/terraform", "infrastructure/gitops"]
+    }
+  ],
+  "footerSocials": {}
+}

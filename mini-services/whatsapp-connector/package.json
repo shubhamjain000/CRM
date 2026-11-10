@@ -1,0 +1,17 @@
+{
+  "name": "whatsapp-connector",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "bun --hot index.ts",
+    "start": "bun index.ts"
+  },
+  "dependencies": {
+    "baileys": "^7.0.0-rc.6",
+    "qrcode": "^1.5.4"
+  },
+  "trustedDependencies": [
+    "baileys",
+    "protobufjs"
+  ]
+}

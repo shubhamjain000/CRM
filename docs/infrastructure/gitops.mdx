@@ -1,0 +1,16 @@
+---
+title: GitOps
+description: ArgoCD deployment flow.
+---
+
+# GitOps with ArgoCD
+
+ArgoCD watches the `main` branch for Kubernetes manifests and reconciles them
+into the EKS cluster.
+
+```
+merge to main ──▶ CI builds images ──▶ manifest PR ──▶ ArgoCD sync ──▶ staging
+                                                                     └─▶ prod (manual)
+```
+
+Production promotion is a manual approve to avoid unintended releases.

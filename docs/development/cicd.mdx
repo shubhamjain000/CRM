@@ -1,0 +1,17 @@
+---
+title: CI/CD
+description: Pipeline and preview environments.
+---
+
+# CI/CD
+
+Every PR runs:
+
+1. **Lint** — ruff + eslint + prettier
+2. **Type check** — mypy + tsc
+3. **Unit tests** — pytest + vitest
+4. **Build verification** — `next build` + `django check`
+5. **Preview** — Vercel (frontend) + ephemeral K8s namespace (backend)
+6. **Infra plan** — `terraform plan` on the Terraform modules
+
+On merge to `main`, ArgoCD reconciles staging. Production promotes manually.

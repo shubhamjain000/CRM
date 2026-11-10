@@ -1,0 +1,106 @@
+[
+  {
+    "id": "demo-seed-15551234567-52",
+    "from": "15551234567",
+    "to": "15550012345",
+    "text": "Hi! Is the Tuesday product demo still on?",
+    "timestamp": 1793610592130,
+    "direction": "in"
+  },
+  {
+    "id": "demo-seed-15551234567-50",
+    "from": "15550012345",
+    "to": "15551234567",
+    "text": "Yes — sending the calendar invite now 📩",
+    "timestamp": 1793610712130,
+    "direction": "out"
+  },
+  {
+    "id": "demo-seed-15551234567-8",
+    "from": "15551234567",
+    "to": "15550012345",
+    "text": "Perfect, see you then!",
+    "timestamp": 1793613232130,
+    "direction": "in"
+  },
+  {
+    "id": "demo-seed-15559876543-180",
+    "from": "15559876543",
+    "to": "15550012345",
+    "text": "Could you share the pricing sheet?",
+    "timestamp": 1793602912130,
+    "direction": "in"
+  },
+  {
+    "id": "demo-seed-15559876543-175",
+    "from": "15550012345",
+    "to": "15559876543",
+    "text": "Sent — check your email.",
+    "timestamp": 1793603212130,
+    "direction": "out"
+  },
+  {
+    "id": "demo-seed-919876543210-1440",
+    "from": "919876543210",
+    "to": "15550012345",
+    "text": "The onboarding doc was super helpful, thanks!",
+    "timestamp": 1793527312130,
+    "direction": "in"
+  },
+  {
+    "id": "demo-seed-919876543210-1435",
+    "from": "15550012345",
+    "to": "919876543210",
+    "text": "Glad it helped — ping me anytime.",
+    "timestamp": 1793527612130,
+    "direction": "out"
+  },
+  {
+    "id": "demo-seed-919876543210-1420",
+    "from": "919876543210",
+    "to": "15550012345",
+    "text": "Quick question about the API limits…",
+    "timestamp": 1793528512130,
+    "direction": "in"
+  },
+  {
+    "id": "demo-seed-447700900123-2880",
+    "from": "15550012345",
+    "to": "447700900123",
+    "text": "Got it, thanks for the quick turnaround 👍",
+    "timestamp": 1793440912130,
+    "direction": "out"
+  },
+  {
+    "id": "demo-in-1793613713333-zq1hr9",
+    "from": "15557654321",
+    "to": "15550012345",
+    "text": "Demo session started. Send a message and the demo contact will echo it back in about a second.",
+    "timestamp": 1793613713333,
+    "direction": "in"
+  },
+  {
+    "id": "demo-in-1793615020927-x946up",
+    "from": "15557654321",
+    "to": "15550012345",
+    "text": "Demo session started. Send a message and the demo contact will echo it back in about a second.",
+    "timestamp": 1793615020927,
+    "direction": "in"
+  },
+  {
+    "id": "demo-in-1793615633075-coq3pu",
+    "from": "15557654321",
+    "to": "15550012345",
+    "text": "Demo session started. Send a message and the demo contact will echo it back in about a second.",
+    "timestamp": 1793615633075,
+    "direction": "in"
+  },
+  {
+    "id": "2141925769704815-1",
+    "from": "0",
+    "to": "918796224082",
+    "text": "*Get ready for the busiest season of the year* 🎁\n\nBefore the holiday rush begins, here are our three quick tips to help you prepare:\n\n🕘 Update your business hours.\n\n👋 Set up automated messages to respond to customers whether you’re open or closed.\n\n🛍️ Showcase your holiday products and deals in a catalog.",
+    "timestamp": 1788841872000,
+    "direction": "in"
+  }
+]
